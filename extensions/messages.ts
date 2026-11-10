@@ -15,6 +15,7 @@ import {
 	UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
 import {
+	type Color,
 	type Component,
 	Markdown,
 	MouseRegion,
@@ -55,6 +56,8 @@ export interface MessageChromeDeps {
 	streamRender?: boolean;
 	/** Gradient fade-in of new characters; needs `smooth` and `streamRender`. */
 	fade?: StreamFadeConfig;
+	/** The terminal's real background (OSC 11), when it reported one: where the fade starts. */
+	terminalBackground?: () => Color | undefined;
 }
 
 /** Runtime shape of the pi components we touch. Every access is guarded. */
@@ -391,31 +394,35 @@ function streamify(
 	if (!state.markdown || state.key !== key) {
 		const incremental = !component.markdownTransformers?.length;
 		const fade: StreamFadeConfig =
-			deps.smooth && deps.fade ? { ...deps.fade, palette: () => fadePalette(deps.theme()) } : { fadeMs: 0, remend: deps.fade?.remend };
+			deps.smooth && deps.fade ? { ...deps.fade, palette: () => fadePalette(deps.theme(), deps.terminalBackground?.()) } : { fadeMs: 0, remend: deps.fade?.remend };
 		state.markdown = new StreamMarkdown(md as never, incremental, fade);
 		state.key = key;
 	} else state.markdown.update(md as never);
 	setMarkdownIn(children, growingAt, state.markdown);
 }
 
-const palettes = new WeakMap<Theme, FadePalette | null>();
+const palettes = new WeakMap<Theme, { background: Color | undefined; palette: FadePalette | null }>();
 
 /**
- * The gradient fade's colors for `theme`: new characters rise from its panel background (the nearest
- * thing pi exposes to the terminal background) to their own color; uncolored text starts from the
- * theme's `text`. Without usable colors the fade stays SGR 2 faint.
+ * The gradient fade's colors for `theme`: new characters rise from the terminal's real background
+ * (opacity 0: invisible until they brighten) to their own color; uncolored text ends at the theme's
+ * `text`. Until the terminal reports its background, the theme's panel background stands in; a
+ * start color that differs from the real background would show every new character as a dark (or
+ * light) glyph first. Without usable colors the fade stays SGR 2 faint.
  */
-function fadePalette(theme: Theme): FadePalette | undefined {
-	let palette = palettes.get(theme);
-	if (palette === undefined) {
+function fadePalette(theme: Theme, background: Color | undefined): FadePalette | undefined {
+	let entry = palettes.get(theme);
+	if (entry === undefined || entry.background !== background) {
+		let palette: FadePalette | null;
 		try {
-			palette = { from: theme.colors.toolPendingBg, base: theme.colors.text, mode: theme.getColorMode() };
+			palette = { from: background ?? theme.colors.toolPendingBg, base: theme.colors.text, mode: theme.getColorMode() };
 		} catch {
 			palette = null;
 		}
-		palettes.set(theme, palette);
+		entry = { background, palette };
+		palettes.set(theme, entry);
 	}
-	return palette ?? undefined;
+	return entry.palette ?? undefined;
 }
 
 /** The `Markdown` a content child shows: itself, or the child of pi's thinking MouseRegion. */

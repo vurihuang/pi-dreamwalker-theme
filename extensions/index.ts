@@ -11,7 +11,7 @@
  * renders and persists, so nothing polls and nothing rescans the session while streaming.
  */
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { TUI } from "@earendil-works/pi-tui";
+import { type Color, rgbColor, type TerminalColors, type TUI } from "@earendil-works/pi-tui";
 import { type AssistantLike, Chronicle, type UserLike } from "./chronicle.ts";
 import { DREAMWALKER } from "./config.ts";
 import { DreamEditor, type EditorLabels } from "./editor.ts";
@@ -41,6 +41,19 @@ export default function dreamwalker(pi: ExtensionAPI) {
 	const editorLabels = (): EditorLabels => ({ ...labels, runStart });
 	/** Captured from the editor/footer factories; the drip needs it to request frames. */
 	let tui: TUI | undefined;
+	/** The terminal's default background (OSC 11): the fade-in starts from it. */
+	let terminalBackground: Color | undefined;
+	let queried: TUI | undefined;
+	const captureTui = (next: TUI) => {
+		tui = next;
+		if (queried === next || !features.streamFade) return;
+		queried = next;
+		const take = (colors: TerminalColors) => {
+			const bg = colors.background;
+			if (bg) terminalBackground = rgbColor(bg.r, bg.g, bg.b);
+		};
+		void next.queryTerminalColors({ timeoutMs: 1000, onLateReply: take }).then(take, () => {});
+	};
 
 	const getTheme = (): Theme => {
 		if (!theme) throw new Error("pi-dreamwalker-theme: theme requested before session_start");
@@ -84,6 +97,7 @@ export default function dreamwalker(pi: ExtensionAPI) {
 				smooth: features.smoothStreaming ? DREAMWALKER.smoothStreaming : undefined,
 				streamRender: features.streamRender,
 				fade: features.streamFade ? DREAMWALKER.streamFade : undefined,
+				terminalBackground: () => terminalBackground,
 				requestRender: () => {
 					if (!tui) return false;
 					tui.requestRender();
@@ -95,7 +109,7 @@ export default function dreamwalker(pi: ExtensionAPI) {
 		if (features.editor) {
 			startCtx.ui.setEditorComponent(
 				(editorTui, editorTheme, editorKeys) => {
-					tui = editorTui;
+					captureTui(editorTui);
 					return new DreamEditor(editorTui, editorTheme, editorKeys, getTheme, editorLabels, 0);
 				},
 			);
@@ -113,7 +127,7 @@ export default function dreamwalker(pi: ExtensionAPI) {
 			};
 			startCtx.ui.setFooter(
 				(footerTui, _theme, data) => {
-					tui = footerTui;
+					captureTui(footerTui);
 					return new DreamFooter(getTheme, data, () => (ctx ? source : undefined), () =>
 						footerTui.requestRender(),
 					);

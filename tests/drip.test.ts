@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, mock, test } from "node:test";
 import { AssistantMessageComponent, getMarkdownTheme, initTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import { rgbColor } from "@earendil-works/pi-tui";
 import { theme as piTheme } from "../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js";
 import { Chronicle } from "../extensions/chronicle.ts";
 import { DREAMWALKER } from "../extensions/config.ts";
@@ -160,6 +161,7 @@ test("findOpenFenceLanguage: the last unclosed ``` fence, like streamdown", () =
 });
 
 const chronicle = new Chronicle();
+let terminalBg: ReturnType<typeof rgbColor> | undefined;
 let frames = 0;
 before(() => {
 	initTheme("dark");
@@ -176,6 +178,7 @@ before(() => {
 			frames++;
 			return true;
 		},
+		terminalBackground: () => terminalBg,
 	});
 });
 after(() => {
@@ -286,6 +289,21 @@ test("assistant: new characters fade in, then settle to normal", () => {
 	assert.equal(visible(component), text);
 	assert.ok(!component.render(120).some(fading), "settled text is normal");
 	component.updateContent(msg(text, "aborted") as never, false);
+});
+
+test("assistant: a new character starts at the terminal's real background, so it is hidden until it brightens", () => {
+	terminalBg = rgbColor(3, 4, 5);
+	try {
+		const component = new AssistantMessageComponent(undefined, false, getMarkdownTheme(), "Thinking...", 1);
+		component.updateContent(msg("hidden ".repeat(30).trim()) as never, true);
+		mock.timers.tick(config.tickMs * 4);
+		const out = component.render(120).join("");
+		assert.ok(out.includes("\x1b[38;2;3;4;5m"), "the reveal front is drawn in the terminal background");
+		run(config.tickMs * 100);
+		component.updateContent(msg("x", "aborted") as never, false);
+	} finally {
+		terminalBg = undefined;
+	}
 });
 
 test("assistant: text inside an open html fence is shown at once; other fences are paced", () => {
