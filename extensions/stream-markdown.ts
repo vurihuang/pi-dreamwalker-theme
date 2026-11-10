@@ -157,6 +157,8 @@ export class StreamMarkdown implements Component {
 	private tailFade: FadeSegment | undefined;
 	private chunkFades: { start: number; segment: FadeSegment }[] = [];
 	private lastCommit = 0;
+	/** The newest birth handed out; the next commit's chars chain on from it (streamdown's wave). */
+	private lastBirth = -Infinity;
 	/** The first text of a new block fades in; text re-rendered after a resize does not. */
 	private started = false;
 
@@ -384,15 +386,19 @@ export class StreamMarkdown implements Component {
 			// Re-rendered after a resize or theme change: already on screen, show as-is.
 			for (let i = 0; i < inserted; i++) births.push(now - this.fadeMs);
 		} else if (inserted > 0) {
-			// Spread a commit's chars over the gap to the previous commit (streamdown's stagger).
+			// Spread a commit's chars over the gap to the previous commit, chained on from the previous
+			// commit's last birth, so the reveal front moves as one wave across commits (streamdown's
+			// `births[i] = min(now + gap + fade, max(births[i - 1] + pace, now))`).
 			const gap = this.lastCommit ? Math.min(Math.max(now - this.lastCommit, 16), 160) : 16;
 			const pace = Math.min(Math.max(gap / inserted, 2), 18);
-			let birth = now;
+			const cap = now + gap + this.fadeMs;
+			let birth = this.lastBirth;
 			for (let i = 0; i < inserted; i++) {
+				birth = Math.min(cap, Math.max(birth + pace, now));
 				births.push(birth);
 				if (birth > maxBirth) maxBirth = birth;
-				birth = Math.min(now + gap, birth + pace);
 			}
+			this.lastBirth = birth;
 			if (p < youngFrom) youngFrom = p;
 			this.lastCommit = now;
 		}
@@ -609,13 +615,29 @@ function sgrState(params: string, state: { fg: Fg; bold: boolean; faint: boolean
 
 const gradientCache = new Map<string, string>();
 
-/** SGR of `color` at gradient `step` of `steps`, mixed from the palette's background. Cached. */
+/** CSS `cubic-bezier(x1, 0, x2, 1)` at time `t` (streamdown's fade curve), by bisection on x. */
+function easeInOut(t: number, x1 = 0.33, x2 = 0.67): number {
+	const bez = (s: number, a: number, b: number) => 3 * a * s * (1 - s) ** 2 + 3 * b * s * s * (1 - s) + s ** 3;
+	let lo = 0;
+	let hi = 1;
+	for (let i = 0; i < 20; i++) {
+		const mid = (lo + hi) / 2;
+		if (bez(mid, x1, x2) < t) lo = mid;
+		else hi = mid;
+	}
+	return bez((lo + hi) / 2, 0, 1);
+}
+
+/**
+ * SGR of `color` at gradient `step` of `steps`, mixed from the palette's background: opacity 0 → 1
+ * on streamdown's curve, so a new char starts invisible and eases in. Cached.
+ */
 function gradientSgr(fg: Fg, step: number, steps: number, palette: FadePalette): string | undefined {
 	if (!palette.from || !known(fg.color)) return undefined;
 	const key = `${fg.seq}|${step}|${steps}|${palette.mode}|${JSON.stringify(palette.from)}`;
 	let sgr = gradientCache.get(key);
 	if (sgr === undefined) {
-		const rise = 0.25 + 0.75 * (step / steps);
+		const rise = easeInOut(step / steps);
 		const mixed = mixColors(palette.from, fg.color, rise, "srgb");
 		const { r, g, b } = colorToRgb(mixed);
 		sgr = foregroundAnsi(rgbColor(r, g, b), palette.mode);

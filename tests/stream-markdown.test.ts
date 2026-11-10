@@ -202,6 +202,7 @@ test("fade: with a palette a char rises from the background to its color in step
 	const first = sgrOf(at(0))[1]!;
 	const last = sgrOf(at(170))[1]!;
 	assert.ok(first[0]! < last[0]! && last[0]! < 200, "brighter each step, short of the final color");
+	assert.deepEqual(first, [16, 16, 20], "a new char starts at the background (opacity 0)");
 	assert.ok(!at(0).includes("\x1b[2m"), "a known color needs no faint");
 	assert.equal(at(180).replace(ANSI, ""), "  abc");
 	assert.equal(at(180), line, "settled: the line is untouched");
@@ -218,6 +219,28 @@ test("fade: with a palette a char rises from the background to its color in step
 	const ansi = faint("  \x1b[31mhi\x1b[39m", [1000, 1000], 0, 1000, 180, style);
 	assert.ok(ansi.includes("\x1b[2m"), "an ANSI palette color falls back to faint");
 	assert.equal(visibleWidth(plain), visibleWidth("  hi"));
+});
+
+test("fade: births chain across commits, so the reveal front moves as one wave", () => {
+	let now = 1000;
+	const realNow = Date.now;
+	Date.now = () => now;
+	try {
+		const stream = new StreamMarkdown(md("") as never, true, { fadeMs: 180 });
+		const births = () => (stream as unknown as { tailFade: { births: number[] } }).tailFade.births.slice();
+		stream.render(80);
+		stream.update(md("abcdefghij") as never);
+		stream.render(80);
+		now += 16;
+		stream.update(md("abcdefghijklmnopqrst") as never);
+		stream.render(80);
+		const b = births();
+		assert.equal(b.length, 20);
+		for (let i = 1; i < b.length; i++) assert.ok(b[i]! >= b[i - 1]!, `birth ${i} not before ${i - 1}: ${b}`);
+		assert.ok(b[10]! > b[9]!, "the second commit continues after the first commit's last char");
+	} finally {
+		Date.now = realNow;
+	}
 });
 
 test("fade: word granularity fades a word as one unit, by its newest char", () => {

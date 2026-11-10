@@ -158,14 +158,15 @@ export const DREAMWALKER = {
 	},
 	/**
 	 * Fade-in of new characters (after streamdown's animation). A character rises from the panel
-	 * background to its own color in `steps` steps over `fadeMs` (180 ms in streamdown), then settles;
+	 * background (opacity 0) to its own color in `steps` steps over `fadeMs` on streamdown's
+	 * `cubic-bezier(0.33, 0, 0.67, 1)` (180 ms in streamdown), then settles;
 	 * text of unknown color, or a theme without usable colors, is drawn faint (SGR 2) instead. `word`
 	 * fades whole words together. Fenced code skips the fade and reveals as a block.
 	 */
 	streamFade: {
 		fadeMs: 180,
 		granularity: "char" as "char" | "word",
-		steps: 5,
+		steps: 8,
 		/** remend options layered over the defaults (see stream-markdown.ts `REMEND_OPTIONS`), e.g. `{ htmlTags: true }`. */
 		remend: undefined as Record<string, unknown> | undefined,
 	},
