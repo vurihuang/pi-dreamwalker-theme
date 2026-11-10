@@ -1,8 +1,8 @@
 /** Smooth streaming presets: reserve for the next chunk, and the shortest commit interval. */
 const SMOOTH_PRESETS = {
-	realtime: { targetBufferMs: 40, minCommitMs: 32 },
-	balanced: { targetBufferMs: 120, minCommitMs: 48 },
-	silky: { targetBufferMs: 170, minCommitMs: 56 },
+	realtime: { targetBufferMs: 40, minCommitMs: 32, flushCps: 170, settleDrainMinMs: 140, settleDrainMaxMs: 360 },
+	balanced: { targetBufferMs: 120, minCommitMs: 48, flushCps: 120, settleDrainMinMs: 180, settleDrainMaxMs: 520 },
+	silky: { targetBufferMs: 170, minCommitMs: 56, flushCps: 96, settleDrainMinMs: 240, settleDrainMaxMs: 680 },
 };
 
 /**
@@ -130,10 +130,11 @@ export const DREAMWALKER = {
 	 *   balanced  120 ms reserve, commits every 48 ms    default
 	 *   silky     170 ms reserve, commits every 56 ms    steadiest flow
 	 *
-	 * The commit interval widens by `commitPerChars` of open tail, up to `maxCommitMs`, so long
-	 * paragraphs and lists keep the work bounded while short blocks stay snappy. Backlog is never
-	 * older than ~`maxLagMs`; at message end the rest drains within `settleDrainMinMs`–`settleDrainMaxMs`
-	 * instead of jumping. Input that ends inside an open `html` fence is shown at once (live previews).
+	 * The commit interval grows by `minCommitMs` per `commitTailScale` chars of open tail, up to
+	 * `maxCommitMs`, so long paragraphs and lists keep the work bounded while short blocks stay snappy.
+	 * Finished blocks in the backlog are shown at once; only the open tail is paced. Backlog is never
+	 * older than ~`maxLagMs`; at message end the rest drains within the preset's
+	 * `settleDrainMinMs`–`settleDrainMaxMs` instead of jumping. Input that ends inside an open `html` fence is shown at once (live previews).
 	 */
 	smoothStreaming: {
 		preset: "balanced" as "realtime" | "balanced" | "silky",
@@ -145,15 +146,22 @@ export const DREAMWALKER = {
 		},
 		/** The ticker's step; commits and frames are rate-limited on top of it. */
 		tickMs: 16,
-		/** Open-tail characters per extra millisecond of commit interval (0 = never widen). */
-		commitPerChars: 40,
+		/** Open-tail characters that add one `minCommitMs` to the commit interval (streamdown: 256; 0 = never widen). */
+		commitTailScale: 256,
 		maxCommitMs: 96,
 		/** Frame requests for the fade alone (no new text) are at least this far apart. */
 		fadeFrameMs: 33,
 		maxLagMs: 450,
-		flushCps: 120,
-		settleDrainMinMs: 120,
-		settleDrainMaxMs: 400,
+		get flushCps(): number {
+			return SMOOTH_PRESETS[this.preset].flushCps;
+		},
+		/** The end-of-message drain (8 ms per char) is kept within this window. */
+		get settleDrainMinMs(): number {
+			return SMOOTH_PRESETS[this.preset].settleDrainMinMs;
+		},
+		get settleDrainMaxMs(): number {
+			return SMOOTH_PRESETS[this.preset].settleDrainMaxMs;
+		},
 		largeAppendChars: 4000,
 	},
 	/**

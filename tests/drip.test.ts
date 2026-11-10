@@ -133,7 +133,22 @@ test("commit pacing: the interval widens with the open tail, up to the cap", () 
 	assert.equal(interval(0), config.minCommitMs);
 	assert.ok(interval(400) > interval(40) && interval(40) > interval(0));
 	assert.equal(interval(1_000_000), config.maxCommitMs);
-	assert.equal(commitInterval({ ...config, commitPerChars: 0 }, 5000), config.minCommitMs, "0 = never widen");
+	assert.equal(commitInterval({ ...config, commitTailScale: 0 }, 5000), config.minCommitMs, "0 = never widen");
+	assert.equal(interval(128), config.minCommitMs * 1.5, "streamdown: minCommit * (1 + tail / 256)");
+});
+
+test("pacer: finished blocks in the backlog are shown at once, only the open tail is paced", () => {
+	const text = "First paragraph, finished.\n\n# Heading\n\nOpen tail that keeps";
+	const state = createPace(0, 0, config);
+	noteInput(state, text.length, 1, config);
+	const shown = advance(state, text, 17, config);
+	assert.equal(text.slice(0, shown), "First paragraph, finished.\n\n# Heading\n\n");
+	// Lists and indented code stay open across a blank line; an open fence is not a boundary.
+	for (const open of ["- a\n\n- b and more", "- a\n\nplain after the list", "para\n\n    code\n\nmore", "```ts\nx\n\ny\n\nz"]) {
+		const s = createPace(0, 0, config);
+		noteInput(s, open.length, 1, config);
+		assert.ok(advance(s, open, 17, config) < open.indexOf("\n\n") + 2, JSON.stringify(open));
+	}
 });
 
 test("findOpenFenceLanguage: the last unclosed ``` fence, like streamdown", () => {

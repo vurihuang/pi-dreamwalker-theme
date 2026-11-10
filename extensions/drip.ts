@@ -22,8 +22,8 @@ export interface DripConfig {
 	tickMs: number;
 	/** Shortest interval between two commits (reveal paints) of a message; set by the preset. */
 	minCommitMs: number;
-	/** Open-tail characters per extra millisecond of commit interval (0 = never widen). */
-	commitPerChars: number;
+	/** Open-tail characters that add one `minCommitMs` to the commit interval (0 = never widen). */
+	commitTailScale: number;
 	/** Longest commit interval. */
 	maxCommitMs: number;
 	/** Frames requested for the fade alone are at least this far apart. */
@@ -92,12 +92,12 @@ export interface PaceState {
 
 /**
  * How long to wait between commits for a message whose open tail has `tailChars` characters: every
- * commit re-parses the tail, so the interval widens with it (streamdown's commit pacing), up to
- * `maxCommitMs`. The per-character fade hides the lower rate.
+ * commit re-parses the tail, so the interval widens with it, up to `maxCommitMs` (streamdown's
+ * `min(96, minCommitIntervalMs * (1 + tail / 256))`). The per-character fade hides the lower rate.
  */
 export function commitInterval(config: DripConfig, tailChars: number): number {
-	if (config.commitPerChars <= 0) return config.minCommitMs;
-	return Math.min(Math.max(config.minCommitMs, config.maxCommitMs), config.minCommitMs + Math.floor(tailChars / config.commitPerChars));
+	if (config.commitTailScale <= 0) return config.minCommitMs;
+	return Math.min(Math.max(config.minCommitMs, config.maxCommitMs), config.minCommitMs * (1 + tailChars / config.commitTailScale));
 }
 
 /**
@@ -158,8 +158,8 @@ export function advance(state: PaceState, text: string, now: number, config: Dri
 
 	let cps: number;
 	if (ending) {
-		const rate = Math.max(state.rate, config.flushCps);
-		state.drainBy ??= now + clamp((backlog * 1000) / rate, config.settleDrainMinMs, config.settleDrainMaxMs);
+		// streamdown's settle: 8 ms per char, within the preset's drain window.
+		state.drainBy ??= now + clamp(backlog * 8, config.settleDrainMinMs, config.settleDrainMaxMs);
 		cps = (backlog * 1000) / Math.max(config.tickMs, state.drainBy - now);
 	} else {
 		// Make the backlog last until the next expected chunk, plus the reserve.
@@ -168,10 +168,46 @@ export function advance(state: PaceState, text: string, now: number, config: Dri
 	}
 
 	state.carry = Math.min(state.carry + (cps * dt) / 1000, backlog);
-	if (state.carry < 1) return state.shown;
-	const next = snap(text, state.shown + Math.floor(state.carry));
-	state.carry -= next - state.shown;
-	return (state.shown = next);
+	const paced = state.carry < 1 ? state.shown : snap(text, state.shown + Math.floor(state.carry));
+	// Blocks that are already finished in the backlog are shown at once; only the open tail is
+	// paced (streamdown's `completeEnd` jump). They still fade in.
+	const complete = paced < target ? completeEnd(text, state.shown, target) : 0;
+	if (complete > paced) {
+		state.carry = 0;
+		return (state.shown = complete);
+	}
+	state.carry -= paced - state.shown;
+	return (state.shown = paced);
+}
+
+const BLANK_LINE = /\n(?:[\t \r]*\n)+/g;
+const LIST_OR_INDENTED = /^(?: {4}|\t| {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$))/;
+
+/**
+ * End of the last finished top-level block in `text[from, to)`: just past its blank line, or 0. A
+ * block before a blank line is finished unless it sits in an open code fence, or it or the
+ * next one is a list or indented code (which a blank line does not end: streamdown's lexer keeps
+ * those open). Only scanned when the backlog holds a blank line.
+ */
+export function completeEnd(text: string, from: number, to: number): number {
+	const pending = text.slice(from, to);
+	if (!/\n[\t \r]*\n/.test(pending)) return 0;
+	let best = 0;
+	BLANK_LINE.lastIndex = 0;
+	for (const match of pending.matchAll(BLANK_LINE)) {
+		const start = from + match.index;
+		const end = start + match[0].length;
+		// More must follow the blank line: until then the block could still continue.
+		if (end >= to) break;
+		const before = text.lastIndexOf("\n\n", start - 1);
+		const blockStart = before < 0 ? 0 : before + 2;
+		const block = text.slice(blockStart, start);
+		const nextLine = text.slice(end, text.indexOf("\n", end) + 1 || to);
+		if (LIST_OR_INDENTED.test(block) || LIST_OR_INDENTED.test(nextLine)) continue;
+		best = end;
+	}
+	if (best && findOpenFenceLanguage(text.slice(0, best)) !== null) return 0;
+	return best;
 }
 
 const BOUNDARY = /[\s.,;:!?)\]}>，。；：！？、）】》]/;

@@ -243,6 +243,8 @@ export class StreamMarkdown implements Component {
 				tail = this.make(source);
 				tailLines = tail.render(width);
 				this.appendFrozen(chunkLines, width, now);
+				// A new block starts its own wave at `now` (streamdown keeps births per block).
+				this.lastBirth = -Infinity;
 			}
 		}
 		this.tail = tail;
@@ -430,6 +432,7 @@ export class StreamMarkdown implements Component {
 			palette: this.fade.palette?.(),
 			steps: this.fade.steps ?? 1,
 			granularity: this.fade.granularity ?? "char",
+			skipFg: this.inlineCodeFg(),
 		};
 		const fadeAt = (segment: FadeSegment, offset: number) => {
 			let index = 0;
@@ -454,6 +457,19 @@ export class StreamMarkdown implements Component {
 		for (const { start, segment } of this.chunkFades) fadeAt(segment, start);
 		if (tail && tailYoung) fadeAt(tail, this.frozenLines.length);
 		return out;
+	}
+
+	private codeFg: { theme: unknown; seq: string | undefined } | undefined;
+
+	/** The SGR that opens inline code in the current theme: streamdown never fades `code`. */
+	private inlineCodeFg(): string | undefined {
+		const theme = this.template.theme as { code?: (text: string) => string };
+		if (this.codeFg?.theme !== theme) {
+			const open = theme.code?.("\0").split("\0")[0] ?? "";
+			const seq = /^\x1b\[38;[25];[\d;]+m$/.test(open) ? open : undefined;
+			this.codeFg = { theme, seq };
+		}
+		return this.codeFg.seq;
 	}
 
 	invalidate(): void {
@@ -563,6 +579,8 @@ export interface FadeStyle {
 	palette?: FadePalette;
 	steps: number;
 	granularity: "char" | "word";
+	/** Text drawn in this foreground (inline code) shows at once, like streamdown's skipped `code`. */
+	skipFg?: string;
 }
 
 /** The foreground a run of text currently has, as the sequence that restores it and its color if known. */
@@ -647,32 +665,29 @@ function gradientSgr(fg: Fg, step: number, steps: number, palette: FadePalette):
 	return sgr;
 }
 
-/** Births with every word's chars carrying the word's newest birth, so a word fades as one unit. */
+const wordSegmenter = typeof Intl !== "undefined" && "Segmenter" in Intl ? new Intl.Segmenter(undefined, { granularity: "word" }) : undefined;
+
+/**
+ * Births with every word's chars carrying the word's first birth, so a word fades as one unit and
+ * chars that join it later take its current step (streamdown's word spans). Words are split like
+ * streamdown's (`Intl.Segmenter`: CJK by word, punctuation on its own).
+ */
 function wordBirths(line: string, births: readonly number[], index: number): number[] {
-	const out: number[] = [];
-	let start = 0;
-	let newest = -Infinity;
-	const close = () => {
-		for (let k = start; k < out.length; k++) out[k] = newest;
-		start = out.length;
-		newest = -Infinity;
-	};
+	let plain = "";
 	for (let i = 0; i < line.length; ) {
-		if (line[i] === ESC) {
-			i += escapeLength(line, i);
-			continue;
-		}
-		const cp = line.codePointAt(i)!;
-		const size = cp > 0xffff ? 2 : 1;
-		if (isSpace(cp)) close();
-		else {
-			const birth = births[index + out.length]!;
-			if (birth > newest) newest = birth;
-			for (let u = 0; u < size; u++) out.push(birth);
-		}
-		i += size;
+		if (line[i] === ESC) i += escapeLength(line, i);
+		else plain += line[i++];
 	}
-	close();
+	const segments = wordSegmenter ? Array.from(wordSegmenter.segment(plain), (s) => s.segment) : (plain.match(/\s+|\S+/g) ?? []);
+	const out: number[] = [];
+	for (const segment of segments) {
+		let first: number | undefined;
+		for (const ch of segment) {
+			if (isSpace(ch.codePointAt(0)!)) continue;
+			first ??= births[index + out.length]!;
+			for (let u = 0; u < ch.length; u++) out.push(first);
+		}
+	}
 	return out;
 }
 
@@ -690,6 +705,7 @@ export function faint(
 	style?: FadeStyle,
 ): string {
 	const palette = style?.palette;
+	const skipFg = style?.skipFg;
 	const steps = Math.max(1, style?.steps ?? 1);
 	const base: Fg = { seq: DEFAULT_FG, color: palette?.base };
 	const state = { fg: base, bold: false, faint: false, base, fgChanged: false };
@@ -737,7 +753,7 @@ export function faint(
 		if (!isSpace(cp)) {
 			const age = now - table[at]!;
 			at += size;
-			if (age >= fadeMs) leave();
+			if (age >= fadeMs || (skipFg && state.fg.seq === skipFg)) leave();
 			else {
 				const step = Math.min(steps - 1, Math.floor((Math.max(0, age) / fadeMs) * steps));
 				const sgr = palette ? gradientSgr(state.fg, step, steps, palette) : undefined;

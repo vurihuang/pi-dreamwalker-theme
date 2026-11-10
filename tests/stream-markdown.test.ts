@@ -243,13 +243,25 @@ test("fade: births chain across commits, so the reveal front moves as one wave",
 	}
 });
 
-test("fade: word granularity fades a word as one unit, by its newest char", () => {
+test("fade: word granularity fades a word as one unit, by its first char (streamdown's word span)", () => {
 	const line = "ab cd";
-	const births = [0, 900, 0, 0];
+	const births = [900, 0, 0, 0];
 	const char = faint(line, births, 0, 1000, 150, { palette: undefined, steps: 1, granularity: "char" });
-	assert.equal(char, "a\x1b[2mb \x1b[22mcd");
+	assert.equal(char, "\x1b[2ma\x1b[22mb cd");
 	const word = faint(line, births, 0, 1000, 150, { palette: undefined, steps: 1, granularity: "word" });
-	assert.equal(word, "\x1b[2mab \x1b[22mcd", "the whole word follows its newest char");
+	assert.equal(word, "\x1b[2mab \x1b[22mcd", "the whole word follows its first char");
+	// CJK has no spaces: words come from Intl.Segmenter, so a line is not one unit.
+	const cjk = "你好世界流式输出";
+	const young = faint(cjk, [900, 0, 0, 0, 0, 0, 0, 0], 0, 1000, 150, { palette: undefined, steps: 1, granularity: "word" });
+	assert.ok(young.startsWith("\x1b[2m") && young.endsWith("输出") && young.includes("\x1b[22m"), JSON.stringify(young));
+});
+
+test("fade: inline code shows at once, like streamdown's skipped `code`", () => {
+	const code = "\x1b[38;2;167;152;215m";
+	const line = `ab ${code}cd\x1b[39m ef`;
+	const out = faint(line, [1000, 1000, 1000, 1000, 1000, 1000], 0, 1000, 150, { palette: undefined, steps: 1, granularity: "char", skipFg: code });
+	assert.ok(out.startsWith("\x1b[2mab") && out.includes("\x1b[22mcd\x1b[39m") && out.endsWith("\x1b[2mef\x1b[22m"), JSON.stringify(out));
+	assert.equal(out.replace(ANSI, ""), "ab cd ef");
 });
 
 test("stream markdown: remend options can be overridden", () => {
