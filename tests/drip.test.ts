@@ -65,8 +65,40 @@ test("pacer: lag stays bounded for fast models and drains quickly after the end"
 	const worst = Math.max(...lags.slice(0, endTick));
 	assert.ok(worst < 1200 * (config.maxLagMs / 1000) + 120, `worst lag ${worst} chars`);
 	const drainTicks = shown.length - 1 - endTick;
-	assert.ok(drainTicks * config.tickMs <= config.settleDrainMaxMs + 2 * config.tickMs, `drained in ${drainTicks} ticks`);
+	assert.ok(drainTicks * config.tickMs <= config.maxLagMs + 2 * config.tickMs, `drained in ${drainTicks} ticks`);
 	assert.equal(shown.at(-1), text.length);
+});
+
+test("pacer: events of one provider burst count as one chunk", () => {
+	// 22 SSE deltas of 4 chars land in the same few ms, every 350 ms (a bursty provider).
+	const text = "x".repeat(100_000);
+	const run = () => {
+		let now = 1000;
+		let length = 0;
+		let lastCommit = 0;
+		const state = createPace(0, now, config);
+		const commits: number[] = [];
+		for (let t = 0; t < 4000; t++) {
+			now = 1000 + t;
+			if (t % 350 === 0) for (let i = 0; i < 22; i++) noteInput(state, (length += 4), now, config);
+			if (now - lastCommit >= config.minCommitMs && state.shown < length) {
+				const before = state.shown;
+				advance(state, text.slice(0, length), now, config);
+				lastCommit = now;
+				if (state.shown !== before && t > 1500) commits.push(state.shown - before);
+			}
+		}
+		return commits;
+	};
+	const burst = run();
+	assert.ok(Math.max(...burst) <= 20, `largest commit ${Math.max(...burst)}`);
+	assert.ok(burst.length >= 20, `commits ${burst.length}: the burst is spread, not dumped at once`);
+	const state = createPace(0, 0, config);
+	noteInput(state, 4, 100, config);
+	noteInput(state, 8, 103, config);
+	noteInput(state, 12, 106, config);
+	assert.equal(state.burstSize, 12, "three events inside the join window are one chunk");
+	assert.ok(Math.abs(state.chunkSize - (1 * 0.65 + 12 * 0.35)) < 1e-9);
 });
 
 test("pacer: a huge single append is shown at once", () => {
@@ -145,7 +177,8 @@ test("pacer: finished blocks in the backlog are shown at once, only the open tai
 	const shown = advance(state, text, 17, config);
 	assert.equal(text.slice(0, shown), "First paragraph, finished.\n\n# Heading\n\n");
 	// Lists and indented code stay open across a blank line; an open fence is not a boundary.
-	for (const open of ["- a\n\n- b and more", "- a\n\nplain after the list", "para\n\n    code\n\nmore", "```ts\nx\n\ny\n\nz"]) {
+	const far = "word ".repeat(12).trim();
+	for (const open of [`- ${far}\n\n- b and more`, `- ${far}\n\nplain after the list`, `${far}\n\n    code\n\nmore`, `\`\`\`ts\n${far}\n\ny\n\nz`]) {
 		const s = createPace(0, 0, config);
 		noteInput(s, open.length, 1, config);
 		assert.ok(advance(s, open, 17, config) < open.indexOf("\n\n") + 2, JSON.stringify(open));
@@ -232,12 +265,12 @@ test("assistant: a burst is revealed over ticks; the end drains, then pi's final
 	run(config.tickMs * 100);
 	assert.equal(visible(component), words);
 
-	// The final update drains the backlog within the settle window, then pi's own build runs.
+	// The final update drains the backlog within the lag bound, then pi's own build runs.
 	const longer = `${words} ${"tail ".repeat(40).trim()}`;
 	component.updateContent(msg(longer) as never, true);
 	component.updateContent(msg(longer) as never, false);
 	assert.ok(visible(component).length < longer.length, "not dumped at the end");
-	run(config.settleDrainMaxMs + 160 + DREAMWALKER.streamFade.fadeMs + config.tickMs * 2);
+	run(config.maxLagMs + 160 + DREAMWALKER.streamFade.fadeMs + config.tickMs * 2);
 	assert.equal(visible(component), longer);
 	assert.equal((component as unknown as { isStreaming: boolean }).isStreaming, false, "final build ran");
 	assert.ok(!component.render(200).some((line) => line.includes("\x1b[2m")), "no faint left");

@@ -27,6 +27,7 @@
 import { type Color, type Component, colorToRgb, foregroundAnsi, indexedColor, mixColors, rgbColor, type TerminalColorMode } from "@earendil-works/pi-tui";
 import remend, { type RemendOptions } from "remend";
 import { type CodeTheme, CodeTailRenderer, openFence } from "./code-tail.ts";
+import { findOpenFenceLanguage } from "./drip.ts";
 
 /** Below this size an open code block renders through pi's Markdown (cheap either way). */
 export const OPEN_CODE_MIN_CHARS = 1024;
@@ -183,6 +184,12 @@ export class StreamMarkdown implements Component {
 	/** Characters of the open tail (what is not frozen yet): the cost of the next commit grows with it. */
 	tailLength(): number {
 		return Math.max(0, this.text.length - this.frozenRaw.length);
+	}
+
+	/** Whether the open tail ends inside an unclosed code fence (code reveals without a fade). */
+	inOpenCode(): boolean {
+		const tail = this.text.slice(this.frozenRaw.length);
+		return tail.includes("```") && findOpenFenceLanguage(tail) !== null;
 	}
 
 	private make(text: string): MarkdownInternals {
@@ -433,6 +440,7 @@ export class StreamMarkdown implements Component {
 			steps: this.fade.steps ?? 1,
 			granularity: this.fade.granularity ?? "char",
 			skipFg: this.inlineCodeFg(),
+			skipLead: this.bulletFg(),
 		};
 		const fadeAt = (segment: FadeSegment, offset: number) => {
 			let index = 0;
@@ -460,8 +468,19 @@ export class StreamMarkdown implements Component {
 	}
 
 	private codeFg: { theme: unknown; seq: string | undefined } | undefined;
+	private bulletSeq: { theme: unknown; seq: string | undefined } | undefined;
 
 	/** The SGR that opens inline code in the current theme: streamdown never fades `code`. */
+	/** The foreground of list markers (`- `, `1. `): like streamdown's `::marker`, they do not fade. */
+	private bulletFg(): string | undefined {
+		const theme = this.template.theme as { listBullet?: (text: string) => string };
+		if (this.bulletSeq?.theme !== theme) {
+			const open = theme.listBullet?.("\0").split("\0")[0] ?? "";
+			this.bulletSeq = { theme, seq: /^\x1b\[38;[25];[\d;]+m$/.test(open) ? open : undefined };
+		}
+		return this.bulletSeq.seq;
+	}
+
 	private inlineCodeFg(): string | undefined {
 		const theme = this.template.theme as { code?: (text: string) => string };
 		if (this.codeFg?.theme !== theme) {
@@ -581,6 +600,8 @@ export interface FadeStyle {
 	granularity: "char" | "word";
 	/** Text drawn in this foreground (inline code) shows at once, like streamdown's skipped `code`. */
 	skipFg?: string;
+	/** Text in this foreground before the first other text of a row (a list marker) shows at once. */
+	skipLead?: string;
 }
 
 /** The foreground a run of text currently has, as the sequence that restores it and its color if known. */
@@ -706,6 +727,8 @@ export function faint(
 ): string {
 	const palette = style?.palette;
 	const skipFg = style?.skipFg;
+	const skipLead = style?.skipLead;
+	let leading = true;
 	const steps = Math.max(1, style?.steps ?? 1);
 	const base: Fg = { seq: DEFAULT_FG, color: palette?.base };
 	const state = { fg: base, bold: false, faint: false, base, fgChanged: false };
@@ -753,7 +776,9 @@ export function faint(
 		if (!isSpace(cp)) {
 			const age = now - table[at]!;
 			at += size;
-			if (age >= fadeMs || (skipFg && state.fg.seq === skipFg)) leave();
+			const marker: boolean = leading && !!skipLead && state.fg.seq === skipLead;
+			leading = marker;
+			if (age >= fadeMs || marker || (skipFg && state.fg.seq === skipFg)) leave();
 			else {
 				const step = Math.min(steps - 1, Math.floor((Math.max(0, age) / fadeMs) * steps));
 				const sgr = palette ? gradientSgr(state.fg, step, steps, palette) : undefined;

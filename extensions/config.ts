@@ -1,8 +1,12 @@
-/** Smooth streaming presets: reserve for the next chunk, and the shortest commit interval. */
+/**
+ * Smooth streaming presets: streamdown's own, field for field (`PRESET_CONFIG` in its
+ * `useSmoothStreamContent`). `largeAppendChars` and `bypassFencedLanguages` are not here: they are
+ * set below, for pi's providers.
+ */
 const SMOOTH_PRESETS = {
-	realtime: { targetBufferMs: 40, minCommitMs: 32, flushCps: 170, settleDrainMinMs: 140, settleDrainMaxMs: 360 },
-	balanced: { targetBufferMs: 120, minCommitMs: 48, flushCps: 120, settleDrainMinMs: 180, settleDrainMaxMs: 520 },
-	silky: { targetBufferMs: 170, minCommitMs: 56, flushCps: 96, settleDrainMinMs: 240, settleDrainMaxMs: 680 },
+	realtime: { targetBufferMs: 40, minCommitMs: 32, flushCps: 170, settleDrainMinMs: 140, settleDrainMaxMs: 360, activeInputWindowMs: 140, settleAfterMs: 260, defaultCps: 50, minCps: 24, maxCps: 96, maxActiveCps: 180, maxFlushCps: 360, emaAlpha: 0.3 },
+	balanced: { targetBufferMs: 120, minCommitMs: 48, flushCps: 120, settleDrainMinMs: 180, settleDrainMaxMs: 520, activeInputWindowMs: 220, settleAfterMs: 360, defaultCps: 38, minCps: 18, maxCps: 72, maxActiveCps: 132, maxFlushCps: 280, emaAlpha: 0.2 },
+	silky: { targetBufferMs: 170, minCommitMs: 56, flushCps: 96, settleDrainMinMs: 240, settleDrainMaxMs: 680, activeInputWindowMs: 320, settleAfterMs: 460, defaultCps: 28, minCps: 14, maxCps: 56, maxActiveCps: 102, maxFlushCps: 220, emaAlpha: 0.14 },
 };
 
 /**
@@ -134,7 +138,9 @@ export const DREAMWALKER = {
 	 * `maxCommitMs`, so long paragraphs and lists keep the work bounded while short blocks stay snappy.
 	 * Finished blocks in the backlog are shown at once; only the open tail is paced. Backlog is never
 	 * older than ~`maxLagMs`; at message end the rest drains within the preset's
-	 * `settleDrainMinMs`–`settleDrainMaxMs` instead of jumping. Input that ends inside an open `html` fence is shown at once (live previews).
+	 * `settleDrainMinMs`–`settleDrainMaxMs` instead of jumping. Events of one provider burst count as
+	 * one chunk in the rate estimates. Inside an open code fence commits are not widened with the tail
+	 * (code reveals without a fade, so its rhythm is visible). Input that ends inside an open `html` fence is shown at once (live previews).
 	 */
 	smoothStreaming: {
 		preset: "balanced" as "realtime" | "balanced" | "silky",
@@ -150,10 +156,38 @@ export const DREAMWALKER = {
 		commitTailScale: 256,
 		maxCommitMs: 96,
 		/** Frame requests for the fade alone (no new text) are at least this far apart. */
-		fadeFrameMs: 33,
-		maxLagMs: 450,
+		fadeFrameMs: 16,
+		/**
+		 * Any backlog is revealed within about this long. streamdown has no such bound (its CPS
+		 * clamps let a fast model fall behind); this loose one is the only place the pacer is faster.
+		 */
+		maxLagMs: 1500,
 		get flushCps(): number {
 			return SMOOTH_PRESETS[this.preset].flushCps;
+		},
+		get activeInputWindowMs(): number {
+			return SMOOTH_PRESETS[this.preset].activeInputWindowMs;
+		},
+		get settleAfterMs(): number {
+			return SMOOTH_PRESETS[this.preset].settleAfterMs;
+		},
+		get defaultCps(): number {
+			return SMOOTH_PRESETS[this.preset].defaultCps;
+		},
+		get minCps(): number {
+			return SMOOTH_PRESETS[this.preset].minCps;
+		},
+		get maxCps(): number {
+			return SMOOTH_PRESETS[this.preset].maxCps;
+		},
+		get maxActiveCps(): number {
+			return SMOOTH_PRESETS[this.preset].maxActiveCps;
+		},
+		get maxFlushCps(): number {
+			return SMOOTH_PRESETS[this.preset].maxFlushCps;
+		},
+		get emaAlpha(): number {
+			return SMOOTH_PRESETS[this.preset].emaAlpha;
 		},
 		/** The end-of-message drain (8 ms per char) is kept within this window. */
 		get settleDrainMinMs(): number {
@@ -174,7 +208,7 @@ export const DREAMWALKER = {
 	streamFade: {
 		fadeMs: 180,
 		granularity: "char" as "char" | "word",
-		steps: 8,
+		steps: 12,
 		/** remend options layered over the defaults (see stream-markdown.ts `REMEND_OPTIONS`), e.g. `{ htmlTags: true }`. */
 		remend: undefined as Record<string, unknown> | undefined,
 	},

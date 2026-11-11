@@ -264,6 +264,18 @@ test("fade: inline code shows at once, like streamdown's skipped `code`", () => 
 	assert.equal(out.replace(ANSI, ""), "ab cd ef");
 });
 
+test("fade: list markers show at once, like streamdown's ::marker", () => {
+	const bullet = "\x1b[38;2;107;107;109m";
+	const line = `  ${bullet}- \x1b[39mab`;
+	const births = [1000, 1000, 1000];
+	const out = faint(line, births, 0, 1000, 150, { palette: undefined, steps: 1, granularity: "char", skipLead: bullet });
+	assert.ok(out.includes("- \x1b[39m\x1b[2mab"), JSON.stringify(out));
+	assert.ok(!out.includes("\x1b[2m-"), "the marker is not faint");
+	// Text in the marker's color later in the row is not a marker.
+	const later = faint(`ab ${bullet}cd`, [1000, 1000, 1000, 1000], 0, 1000, 150, { palette: undefined, steps: 1, granularity: "char", skipLead: bullet });
+	assert.ok(later.includes("\x1b[2m"), JSON.stringify(later));
+});
+
 test("stream markdown: remend options can be overridden", () => {
 	const opened = new StreamMarkdown(md("a <b>x") as never, true, { fadeMs: 0 }).render(80).join("\n");
 	assert.ok(opened.includes("<b>"));

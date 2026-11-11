@@ -289,7 +289,10 @@ const drip = {
 			const text = blockText(slot);
 			if (slot.pace.shown < text.length) {
 				// Commits are rate-limited, and spaced wider as the open tail (what each commit re-parses) grows.
-				const tail = component.__dreamwalkerStream?.markdown?.tailLength() ?? 0;
+				// Inside an open code fence they are not widened: code has no fade to hide a slow rhythm,
+				// and its renderer re-draws one line, not the whole tail.
+				const markdown = component.__dreamwalkerStream?.markdown;
+				const tail = markdown?.inOpenCode() ? 0 : (markdown?.tailLength() ?? 0);
 				// Text inside an open ```html fence is shown at once, like streamdown, for live previews.
 				const live = text.includes("```html") && findOpenFenceLanguage(text) === "html";
 				if (live || now - slot.paintedAt >= commitInterval(config, tail)) {
