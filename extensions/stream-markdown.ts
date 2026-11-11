@@ -28,6 +28,7 @@ import { type Color, type Component, colorToRgb, foregroundAnsi, indexedColor, m
 import remend, { type RemendOptions } from "remend";
 import { type CodeTheme, CodeTailRenderer, openFence } from "./code-tail.ts";
 import { findOpenFenceLanguage } from "./drip.ts";
+import { trace, tracing } from "./trace.ts";
 
 /** Below this size an open code block renders through pi's Markdown (cheap either way). */
 export const OPEN_CODE_MIN_CHARS = 1024;
@@ -408,6 +409,7 @@ export class StreamMarkdown implements Component {
 				if (birth > maxBirth) maxBirth = birth;
 			}
 			this.lastBirth = birth;
+			if (tracing) trace("births", { inserted, gap, span: Math.round(birth - now) });
 			if (p < youngFrom) youngFrom = p;
 			this.lastCommit = now;
 		}

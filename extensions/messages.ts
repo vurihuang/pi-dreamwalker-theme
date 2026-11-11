@@ -42,6 +42,7 @@ import { formatCost, formatDuration, formatTokens } from "./format.ts";
 import { ChromeLine } from "./line.ts";
 import { withFastCodeBlocks } from "./highlight.ts";
 import { type FadePalette, type StreamFadeConfig, StreamMarkdown } from "./stream-markdown.ts";
+import { trace, tracing } from "./trace.ts";
 
 export interface MessageChromeDeps {
 	theme(): Theme;
@@ -263,6 +264,7 @@ const drip = {
 	paint(component: AssistantInternals, slot: DripSlot) {
 		const shown = revealMessage(slot.full as never, slot.block, slot.pace.shown) as AssistantLike;
 		if (shown !== slot.full) revealedCopies.add(shown);
+		if (tracing) trace("commit", { shown: slot.pace.shown, added: slot.pace.shown - Math.max(0, slot.painted), of: slot.block.length, cps: Math.round(slot.pace.cps), chunk: Math.round(slot.pace.chunkSize) });
 		slot.painted = slot.pace.shown;
 		slot.paintedAt = Date.now();
 		this.build?.(component, shown, true);
@@ -315,6 +317,7 @@ const drip = {
 			} else this.active.delete(component); // caught up; the next delta restarts it
 		}
 		if (frame) this.frameAt = now;
+		if (frame && tracing) trace("frame");
 		if (frame && !this.deps?.requestRender?.()) this.flush();
 		if (this.active.size === 0) this.halt();
 	},
@@ -422,6 +425,7 @@ function fadePalette(theme: Theme, background: Color | undefined): FadePalette |
 		} catch {
 			palette = null;
 		}
+		if (tracing) trace("palette", { from: palette?.from ? JSON.stringify(palette.from) : "none", terminalBackground: !!background, mode: palette?.mode });
 		entry = { background, palette };
 		palettes.set(theme, entry);
 	}
